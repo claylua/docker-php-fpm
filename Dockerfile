@@ -16,6 +16,24 @@ RUN apt-get update && apt-get install -y \
         && docker-php-ext-configure gd --with-freetype-dir=/usr/include/ --with-jpeg-dir=/usr/include/ \
         && docker-php-ext-enable gd.so iconv.so intl.so json.so mcrypt.so mysql.so mysqli.so opcache.so pdo.so tidy.so
 
+RUN apt-get update && apt-get install -y \
+    libfreetype6-dev \
+        libmcrypt-dev \
+        libpng12-dev \
+        libjpeg-dev \
+        libpng-dev \
+        vim \
+    && docker-php-ext-install iconv mcrypt \
+    && docker-php-ext-configure gd \
+        --enable-gd-native-ttf \
+        --with-freetype-dir=/usr/include/freetype2 \
+        --with-png-dir=/usr/include \
+        --with-jpeg-dir=/usr/include \
+    && docker-php-ext-install gd \
+    && docker-php-ext-install mbstring \
+    && docker-php-ext-enable opcache gd \
+    && docker-php-ext-install
+
 
 # Expose PHP-FPM port
         EXPOSE 9000
