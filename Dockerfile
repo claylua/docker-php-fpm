@@ -1,4 +1,4 @@
-FROM php:7.1.3-fpm-alphine
+FROM php:7.1.3-fpm-alpine
 MAINTAINER Clay Lua <czeeyong@gmail.com>
 
 ENV HOME /root
