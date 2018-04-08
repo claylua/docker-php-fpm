@@ -1,8 +1,11 @@
 # docker-php-fpm
 docker php fpm without nginx
 
-This file is build from offical PHP image with the tag 5.6.17-fpm, take a look at the dockerfile for more details
+This file is build from offical PHP image with the tag 7.1.3-fpm-alpine, take a look at the dockerfile for more details
 
+run the below command to build the image
+
+docker build -t test .
 
 Visit [Docker Hub](https://hub.docker.com/r/claylua/phpfpm/) for the image
 
