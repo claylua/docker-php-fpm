@@ -1,4 +1,4 @@
-FROM php:7.2.4-fpm-alpine3.6
+FROM php:7.0.29-fpm-alpine3.4
 MAINTAINER Clay Lua <czeeyong@gmail.com>
 
 ENV HOME /root
@@ -18,13 +18,13 @@ RUN apk upgrade --update && apk add \
     libmcrypt-dev \
     libpng-dev \
     && docker-php-ext-configure intl\
-    && docker-php-ext-install -j$(nproc) iconv json gd pdo mysqli intl opcache pdo pdo_mysql mysqli pdo_mysql json mbstring \
+    && docker-php-ext-install -j$(nproc) iconv gd mysqli intl opcache mbstring \
     && docker-php-ext-configure gd \
     --enable-gd-native-ttf \
     --with-freetype-dir=/usr/include/freetype2 \
     --with-png-dir=/usr/include \
     --with-jpeg-dir=/usr/include \
-    && docker-php-ext-enable gd.so iconv.so intl.so json.so mysqli.so opcache.so pdo.so mbstring.so
+    && docker-php-ext-enable gd.so iconv.so intl.so mysqli.so opcache.so mbstring.so
 
 # Add Memcache support
 
