@@ -1,4 +1,4 @@
-FROM php:7.0.29-fpm-alpine3.4
+FROM php:7.4.1-fpm-alpine3.11
 MAINTAINER Clay Lua <czeeyong@gmail.com>
 
 ENV HOME /root
@@ -25,6 +25,15 @@ RUN apk upgrade --update && apk add \
     --with-png-dir=/usr/include \
     --with-jpeg-dir=/usr/include \
     && docker-php-ext-enable gd.so iconv.so intl.so mysqli.so opcache.so mbstring.so mcrypt.so
+
+# add ssmtp mail functionality
+RUN apk add ssmtp
+RUN cat > /etc/ssmtp/ssmtp.conf << EOF
+root=postmaster
+mailhub=mail.domain.com:25
+hostname=`hostname`
+FromLineOverride=YES
+EOF
 
 # Add GD Support
 
