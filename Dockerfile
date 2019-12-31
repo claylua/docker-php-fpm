@@ -10,42 +10,48 @@ RUN apk add --update \
     build-base
 
 RUN apk add --no-cache icu-dev
+RUN apk add --update --no-cache g++ gcc libxslt-dev
+
+# GD installation
+
+RUN apk update \
+    && apk upgrade \
+    && apk add --no-cache \
+        freetype \
+        libpng \
+        libjpeg-turbo \
+        freetype-dev \
+        libpng-dev \
+        jpeg-dev \
+        libjpeg \
+        libjpeg-turbo-dev
+
+RUN docker-php-ext-configure gd --with-freetype --with-jpeg
+
+RUN NUMPROC=$(grep -c ^processor /proc/cpuinfo 2>/dev/null || 1) \
+    && docker-php-ext-install -j${NUMPROC} gd
+
 RUN apk upgrade --update && apk add \
+libzip-dev \
     coreutils \
     freetype-dev \
     libjpeg-turbo-dev \
     libltdl \
     libmcrypt-dev \
     libpng-dev \
+oniguruma-dev \ 
     && docker-php-ext-configure intl\
-    && docker-php-ext-install -j$(nproc) iconv gd mysqli intl opcache mbstring mcrypt \
-    && docker-php-ext-configure gd \
-    --enable-gd-native-ttf \
-    --with-freetype-dir=/usr/include/freetype2 \
-    --with-png-dir=/usr/include \
-    --with-jpeg-dir=/usr/include \
-    && docker-php-ext-enable gd.so iconv.so intl.so mysqli.so opcache.so mbstring.so mcrypt.so
+    && docker-php-ext-install -j$(nproc) iconv gd mysqli intl opcache mbstring soap zip \
+    && docker-php-ext-enable gd.so iconv.so intl.so mysqli.so opcache.so mbstring.so 
 
 # add ssmtp mail functionality
 RUN apk add ssmtp
-RUN cat > /etc/ssmtp/ssmtp.conf << EOF
-root=postmaster
-mailhub=mail.domain.com:25
-hostname=`hostname`
-FromLineOverride=YES
-EOF
 
-# Add GD Support
+RUN echo "root=postmaster" >> /etc/ssmtp/ssmtp.conf && \
+    echo "mailhub=mail.domain.com:25" >> /etc/ssmtp/ssmtp.conf && \
+    echo "hostname=`hostname`" >> /etc/ssmtp/ssmtp.conf && \
+    echo "FromLineOverride=YES" >> /etc/ssmtp/ssmtp.conf
 
-RUN apk add --no-cache freetype libpng libjpeg-turbo freetype-dev libpng-dev libjpeg-turbo-dev && \
-  docker-php-ext-configure gd \
-    --with-gd \
-    --with-freetype-dir=/usr/include/ \
-    --with-png-dir=/usr/include/ \
-    --with-jpeg-dir=/usr/include/ && \
-  NPROC=$(grep -c ^processor /proc/cpuinfo 2>/dev/null || 1) && \
-  docker-php-ext-install -j${NPROC} gd && \
-  apk del --no-cache freetype-dev libpng-dev libjpeg-turbo-dev
 
 # Add Memcache support
 
