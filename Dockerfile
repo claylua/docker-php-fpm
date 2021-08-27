@@ -41,8 +41,8 @@ libzip-dev \
     libpng-dev \
 oniguruma-dev \ 
     && docker-php-ext-configure intl\
-    && docker-php-ext-install -j$(nproc) iconv mysqli intl opcache mbstring soap zip pdo pdo_mysql \
-    && docker-php-ext-enable gd.so iconv.so intl.so mysqli.so opcache.so mbstring.so pdo pdo_mysql 
+    && docker-php-ext-install -j$(nproc) iconv mysqli intl opcache mbstring soap zip pdo pdo_mysql calendar extif\
+    && docker-php-ext-enable gd.so iconv.so intl.so mysqli.so opcache.so mbstring.so pdo pdo_mysql calendar extif
 
 # add ssmtp mail functionality
 RUN apk add ssmtp
