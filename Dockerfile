@@ -1,82 +1,112 @@
-FROM php:8.2-cli-alpine3.18
+FROM php:8.2-fpm-alpine
 MAINTAINER Clay Lua <czeeyong@gmail.com>
 
 ENV HOME /root
 
-RUN apk add --update \
-    python \
-    python-dev \
-    py-pip \
-    build-base
+# persistent dependencies
+RUN set -eux; \
+	apk add --no-cache \
+# in theory, docker-entrypoint.sh is POSIX-compliant, but priority is a working, consistent image
+		bash \
+# Ghostscript is required for rendering PDF previews
+		ghostscript \
+# Alpine package for "imagemagick" contains ~120 .so files, see: https://github.com/docker-library/wordpress/pull/497
+		imagemagick \
+	;
 
-RUN apk add --no-cache icu-dev
-RUN apk add --update --no-cache g++ gcc libxslt-dev
+# install the PHP extensions we need (https://make.wordpress.org/hosting/handbook/handbook/server-environment/#php-extensions)
+RUN set -ex; \
+	\
+	apk add --no-cache --virtual .build-deps \
+		$PHPIZE_DEPS \
+		freetype-dev \
+		icu-dev \
+		imagemagick-dev \
+		libjpeg-turbo-dev \
+		libpng-dev \
+		libwebp-dev \
+		libzip-dev \
+	; \
+	\
+	docker-php-ext-configure gd \
+		--with-freetype \
+		--with-jpeg \
+		--with-webp \
+	; \
+	docker-php-ext-install -j "$(nproc)" \
+		bcmath \
+		exif \
+		gd \
+		intl \
+		mysqli \
+		zip \
+	; \
+# WARNING: imagick is likely not supported on Alpine: https://github.com/Imagick/imagick/issues/328
+# https://pecl.php.net/package/imagick
+	pecl install imagick-3.6.0; \
+	docker-php-ext-enable imagick; \
+	rm -r /tmp/pear; \
+	\
+# some misbehaving extensions end up outputting to stdout 🙈 (https://github.com/docker-library/wordpress/issues/669#issuecomment-993945967)
+	out="$(php -r 'exit(0);')"; \
+	[ -z "$out" ]; \
+	err="$(php -r 'exit(0);' 3>&1 1>&2 2>&3)"; \
+	[ -z "$err" ]; \
+	\
+	extDir="$(php -r 'echo ini_get("extension_dir");')"; \
+	[ -d "$extDir" ]; \
+	runDeps="$( \
+		scanelf --needed --nobanner --format '%n#p' --recursive "$extDir" \
+			| tr ',' '\n' \
+			| sort -u \
+			| awk 'system("[ -e /usr/local/lib/" $1 " ]") == 0 { next } { print "so:" $1 }' \
+	)"; \
+	apk add --no-network --virtual .wordpress-phpexts-rundeps $runDeps; \
+	apk del --no-network .build-deps; \
+	\
+	! { ldd "$extDir"/*.so | grep 'not found'; }; \
+# check for output like "PHP Warning:  PHP Startup: Unable to load dynamic library 'foo' (tried: ...)
+	err="$(php --version 3>&1 1>&2 2>&3)"; \
+	[ -z "$err" ]
 
-# GD installation
+# set recommended PHP.ini settings
+# see https://secure.php.net/manual/en/opcache.installation.php
+RUN set -eux; \
+	docker-php-ext-enable opcache; \
+	{ \
+		echo 'opcache.memory_consumption=128'; \
+		echo 'opcache.interned_strings_buffer=8'; \
+		echo 'opcache.max_accelerated_files=4000'; \
+		echo 'opcache.revalidate_freq=2'; \
+	} > /usr/local/etc/php/conf.d/opcache-recommended.ini
+# https://wordpress.org/support/article/editing-wp-config-php/#configure-error-logging
+RUN { \
+# https://www.php.net/manual/en/errorfunc.constants.php
+# https://github.com/docker-library/wordpress/issues/420#issuecomment-517839670
+		echo 'error_reporting = E_ERROR | E_WARNING | E_PARSE | E_CORE_ERROR | E_CORE_WARNING | E_COMPILE_ERROR | E_COMPILE_WARNING | E_RECOVERABLE_ERROR'; \
+		echo 'display_errors = Off'; \
+		echo 'display_startup_errors = Off'; \
+		echo 'log_errors = On'; \
+		echo 'error_log = /dev/stderr'; \
+		echo 'log_errors_max_len = 1024'; \
+		echo 'ignore_repeated_errors = On'; \
+		echo 'ignore_repeated_source = Off'; \
+		echo 'html_errors = Off'; \
+	} > /usr/local/etc/php/conf.d/error-logging.ini
 
-RUN apk update \
-    && apk upgrade \
-    && apk add --no-cache \
-        freetype \
-        libpng \
-        libjpeg-turbo \
-        freetype-dev \
-        libpng-dev \
-        jpeg-dev \
-        libjpeg \
-        libjpeg-turbo-dev
+# install pdo, etc...
+RUN apk update && apk add --no-cache \
+  freetype-dev libjpeg-turbo-dev libpng-dev libmcrypt-dev \
+  git vim unzip tzdata \
+  libmcrypt-dev \
+  libltdl \
+  && docker-php-ext-install pdo_mysql mysqli gd  \
+  && cp /usr/share/zoneinfo/Asia/Tokyo /etc/localtime \
+  && apk del tzdata \
+  && rm -rf /var/cache/apk/*
 
-RUN docker-php-ext-configure gd --with-freetype --with-jpeg
+RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
 
-RUN NUMPROC=$(grep -c ^processor /proc/cpuinfo 2>/dev/null || 1) \
-    && docker-php-ext-install -j${NUMPROC} gd
-
-RUN apk upgrade --update && apk add \
-libzip-dev \
-    coreutils \
-    freetype-dev \
-    libjpeg-turbo-dev \
-    libltdl \
-    libmcrypt-dev \
-    libpng-dev \
-oniguruma-dev \ 
-    && docker-php-ext-configure intl\
-    && docker-php-ext-install -j$(nproc) iconv mysqli intl opcache mbstring soap zip pdo pdo_mysql calendar extif\
-    && docker-php-ext-enable gd.so iconv.so intl.so mysqli.so opcache.so mbstring.so pdo pdo_mysql calendar extif
-
-# add ssmtp mail functionality
-RUN apk add ssmtp
-
-RUN echo "root=postmaster" >> /etc/ssmtp/ssmtp.conf && \
-    echo "mailhub=mail.domain.com:25" >> /etc/ssmtp/ssmtp.conf && \
-    echo "hostname=`hostname`" >> /etc/ssmtp/ssmtp.conf && \
-    echo "FromLineOverride=YES" >> /etc/ssmtp/ssmtp.conf
-
-
-# Add Memcache support
-
-ENV MEMCACHED_DEPS zlib-dev libmemcached-dev cyrus-sasl-dev
-RUN apk add --no-cache --update libmemcached-libs zlib
-RUN set -xe \
-    && apk add --no-cache --update --virtual .phpize-deps $PHPIZE_DEPS \
-    && apk add --no-cache --update --virtual .memcached-deps $MEMCACHED_DEPS \
-    && pecl install memcached \
-    && echo "extension=memcached.so" > /usr/local/etc/php/conf.d/20_memcached.ini \
-    && rm -rf /usr/share/php7 \
-    && rm -rf /tmp/* \
-    && apk del .memcached-deps .phpize-deps
-
-# Add Redis support
-
-ENV PHPREDIS_VERSION 4.0.0
-
-RUN mkdir -p /usr/src/php/ext/redis \
-    && curl -L https://github.com/phpredis/phpredis/archive/$PHPREDIS_VERSION.tar.gz | tar xvz -C /usr/src/php/ext/redis --strip 1 \
-    && echo 'redis' >> /usr/src/php-available-exts \
-    && docker-php-ext-install redis
-
-RUN echo http://dl-2.alpinelinux.org/alpine/edge/community/ >> /etc/apk/repositories
-RUN apk --no-cache add shadow && usermod -u 1000 www-data
 
 # Expose PHP-FPM port
         EXPOSE 9000
