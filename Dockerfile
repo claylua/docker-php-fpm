@@ -1,112 +1,107 @@
-FROM php:8.2-fpm-alpine
-MAINTAINER Clay Lua <czeeyong@gmail.com>
+FROM php:7.4-fpm-buster
+MAINTAINER Clay Lua <clay@twopiz.com>
 
 ENV HOME /root
 
-# persistent dependencies
-RUN set -eux; \
-	apk add --no-cache \
-# in theory, docker-entrypoint.sh is POSIX-compliant, but priority is a working, consistent image
-		bash \
-# Ghostscript is required for rendering PDF previews
-		ghostscript \
-# Alpine package for "imagemagick" contains ~120 .so files, see: https://github.com/docker-library/wordpress/pull/497
-		imagemagick \
-	;
 
-# install the PHP extensions we need (https://make.wordpress.org/hosting/handbook/handbook/server-environment/#php-extensions)
-RUN set -ex; \
-	\
-	apk add --no-cache --virtual .build-deps \
-		$PHPIZE_DEPS \
-		freetype-dev \
-		icu-dev \
-		imagemagick-dev \
-		libjpeg-turbo-dev \
-		libpng-dev \
-		libwebp-dev \
-		libzip-dev \
-	; \
-	\
-	docker-php-ext-configure gd \
-		--with-freetype \
-		--with-jpeg \
-		--with-webp \
-	; \
-	docker-php-ext-install -j "$(nproc)" \
-		bcmath \
-		exif \
-		gd \
-		intl \
-		mysqli \
-		zip \
-	; \
-# WARNING: imagick is likely not supported on Alpine: https://github.com/Imagick/imagick/issues/328
-# https://pecl.php.net/package/imagick
-	pecl install imagick-3.6.0; \
-	docker-php-ext-enable imagick; \
-	rm -r /tmp/pear; \
-	\
-# some misbehaving extensions end up outputting to stdout 🙈 (https://github.com/docker-library/wordpress/issues/669#issuecomment-993945967)
-	out="$(php -r 'exit(0);')"; \
-	[ -z "$out" ]; \
-	err="$(php -r 'exit(0);' 3>&1 1>&2 2>&3)"; \
-	[ -z "$err" ]; \
-	\
-	extDir="$(php -r 'echo ini_get("extension_dir");')"; \
-	[ -d "$extDir" ]; \
-	runDeps="$( \
-		scanelf --needed --nobanner --format '%n#p' --recursive "$extDir" \
-			| tr ',' '\n' \
-			| sort -u \
-			| awk 'system("[ -e /usr/local/lib/" $1 " ]") == 0 { next } { print "so:" $1 }' \
-	)"; \
-	apk add --no-network --virtual .wordpress-phpexts-rundeps $runDeps; \
-	apk del --no-network .build-deps; \
-	\
-	! { ldd "$extDir"/*.so | grep 'not found'; }; \
-# check for output like "PHP Warning:  PHP Startup: Unable to load dynamic library 'foo' (tried: ...)
-	err="$(php --version 3>&1 1>&2 2>&3)"; \
-	[ -z "$err" ]
+# Container containing php-fpm and php-cli to run and interact with eZ Platform and other Symfony projects
+#
+# It has two modes of operation:
+# - (run.sh cmd) [default] Reconfigure eZ Platform/Publish based on provided env variables and start php-fpm
+# - (bash|php|composer) Allows to execute composer, php or bash against the image
 
-# set recommended PHP.ini settings
-# see https://secure.php.net/manual/en/opcache.installation.php
-RUN set -eux; \
-	docker-php-ext-enable opcache; \
-	{ \
-		echo 'opcache.memory_consumption=128'; \
-		echo 'opcache.interned_strings_buffer=8'; \
-		echo 'opcache.max_accelerated_files=4000'; \
-		echo 'opcache.revalidate_freq=2'; \
-	} > /usr/local/etc/php/conf.d/opcache-recommended.ini
-# https://wordpress.org/support/article/editing-wp-config-php/#configure-error-logging
-RUN { \
-# https://www.php.net/manual/en/errorfunc.constants.php
-# https://github.com/docker-library/wordpress/issues/420#issuecomment-517839670
-		echo 'error_reporting = E_ERROR | E_WARNING | E_PARSE | E_CORE_ERROR | E_CORE_WARNING | E_COMPILE_ERROR | E_COMPILE_WARNING | E_RECOVERABLE_ERROR'; \
-		echo 'display_errors = Off'; \
-		echo 'display_startup_errors = Off'; \
-		echo 'log_errors = On'; \
-		echo 'error_log = /dev/stderr'; \
-		echo 'log_errors_max_len = 1024'; \
-		echo 'ignore_repeated_errors = On'; \
-		echo 'ignore_repeated_source = Off'; \
-		echo 'html_errors = Off'; \
-	} > /usr/local/etc/php/conf.d/error-logging.ini
+# Set defaults for variables used by run.sh
+ENV COMPOSER_HOME=/root/.composer
 
-# install pdo, etc...
-RUN apk update && apk add --no-cache \
-  freetype-dev libjpeg-turbo-dev libpng-dev libmcrypt-dev \
-  git vim unzip tzdata \
-  libmcrypt-dev \
-  libltdl \
-  && docker-php-ext-install pdo_mysql mysqli gd  \
-  && cp /usr/share/zoneinfo/Asia/Tokyo /etc/localtime \
-  && apk del tzdata \
-  && rm -rf /var/cache/apk/*
+# Get packages that we need in container
+RUN apt-get update -q -y \
+    && apt-get install -q -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        acl \
+        sudo \
+	cron \
+	wget \
+	screen \
+# Disable expired Let's Encrypt certificate
+    && sed -i '/mozilla\/DST_Root_CA_X3.crt/ s/./!&/' /etc/ca-certificates.conf \
+    && update-ca-certificates --verbose \
+# Needed for the php extensions we enable below
+    && apt-get install -q -y --no-install-recommends \
+        libfreetype6 \
+        libjpeg62-turbo \
+        libxpm4 \
+        libpng16-16 \
+        libicu63 \
+        libxslt1.1 \
+        libmemcachedutil2 \
+        libzip4 \
+        imagemagick \
+        libonig5 \
+        libpq5 \ 
+# git & unzip needed for composer, unless we document to use dev image for composer install
+# unzip needed due to https://github.com/composer/composer/issues/4471
+        unzip \
+        git \
+# packages useful for dev
+        less \
+        mariadb-client \
+        vim \
+        wget \
+        tree \
+        gdb-minimal \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+# Install and configure php plugins
+RUN set -xe \
+    && buildDeps=" \
+        $PHP_EXTRA_BUILD_DEPS \
+        libfreetype6-dev \
+        libjpeg62-turbo-dev \
+        libxpm-dev \
+        libpng-dev \
+        libicu-dev \
+        libxslt1-dev \
+        libmemcached-dev \
+        libzip-dev \
+        libxml2-dev \
+        libonig-dev \
+        libmagickwand-dev \
+        libpq-dev \
+    " \
+	&& apt-get update -q -y && apt-get install -q -y --no-install-recommends $buildDeps && rm -rf /var/lib/apt/lists/* \
+# Extract php source and install missing extensions
+    && docker-php-source extract \
+    && docker-php-ext-configure mysqli --with-mysqli=mysqlnd \
+    && docker-php-ext-configure pdo_mysql --with-pdo-mysql=mysqlnd \
+    && docker-php-ext-configure pgsql -with-pgsql=/usr/local/pgsql \
+    && docker-php-ext-configure gd --with-freetype=/usr/include/ --with-jpeg=/usr/include/ --with-xpm=/usr/include/ --enable-gd-jis-conv \
+    && docker-php-ext-install exif gd mbstring intl xsl zip mysqli pdo_mysql pdo_pgsql pgsql soap bcmath \
+    && docker-php-ext-enable opcache \
+    && cp /usr/src/php/php.ini-production ${PHP_INI_DIR}/php.ini \
+    \
+# Install imagemagick
+    && for i in $(seq 1 3); do pecl install -o imagick && s=0 && break || s=$? && sleep 1; done; (exit $s) \
+    && docker-php-ext-enable imagick 
+
+RUN cd /tmp \
+	&& curl -o ioncube.tar.gz http://downloads3.ioncube.com/loader_downloads/ioncube_loaders_lin_x86-64.tar.gz \
+    && tar -xvvzf ioncube.tar.gz \
+    && mv ioncube/ioncube_loader_lin_7.4.so /usr/local/lib/php/extensions/* \
+    && rm -Rf ioncube.tar.gz ioncube \
+    && echo "zend_extension=/usr/local/lib/php/extensions/no-debug-non-zts-20190902/ioncube_loader_lin_7.4.so" > /usr/local/etc/php/conf.d/00_docker-php-ext-ioncube_loader_lin_7.4.ini
 
 
-# Expose PHP-FPM port
-        EXPOSE 9000
+# Set timezone
+RUN echo "UTC+8" > /etc/timezone && dpkg-reconfigure --frontend noninteractive tzdata
+
+
+# Create Composer directory (cache and auth files) & Get Composer
+RUN mkdir -p $COMPOSER_HOME \
+    && curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+
+# Needed for docker-machine
+RUN usermod -u 1000 www-data
+RUN chown -R www-data:www-data /home/
+
+EXPOSE 9000
